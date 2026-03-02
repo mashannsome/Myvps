@@ -32,7 +32,7 @@ def get_1m_candles():
         params = {
             "symbol": "XAU/USD",
             "interval": "1min",
-            "outputsize": 200,
+            "outputsize": 1000,
             "apikey": API_KEY
         }
 
@@ -65,17 +65,17 @@ def get_trend_15m(df_1m):
 
     df_15m = df_1m.groupby(df_1m.index // 15).last()
 
-    if len(df_15m) < 200:
+    if len(df_15m) < 50:
         return None
 
+    df_15m["ema20"] = ta.trend.ema_indicator(df_15m["close"], window=20)
     df_15m["ema50"] = ta.trend.ema_indicator(df_15m["close"], window=50)
-    df_15m["ema200"] = ta.trend.ema_indicator(df_15m["close"], window=200)
 
     last = df_15m.iloc[-1]
 
-    if last["ema50"] > last["ema200"]:
+    if last["ema20"] > last["ema50"]:
         return "BUY"
-    elif last["ema50"] < last["ema200"]:
+    elif last["ema20"] < last["ema50"]:
         return "SELL"
     else:
         return None
