@@ -51,6 +51,7 @@ def check_signal():
         send_telegram(f"🔥 SELL XAUUSD\nEntry: {entry}\nSL: {sl}\nTP: {tp}")
 
 while True:
+    send_telegram("Bot XAUUSD aktif 🚀")
     try:
         check_signal()
         time.sleep(60)
