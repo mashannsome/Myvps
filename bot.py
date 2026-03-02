@@ -49,9 +49,9 @@ def check_signal():
         sl = round(entry + 3,2)
         tp = round(entry - 6,2)
         send_telegram(f"🔥 SELL XAUUSD\nEntry: {entry}\nSL: {sl}\nTP: {tp}")
-
+send_telegram("Bot XAUUSD aktif 🚀")
 while True:
-    send_telegram("Bot XAUUSD aktif 🚀")
+    
     try:
         check_signal()
         time.sleep(60)
