@@ -85,7 +85,9 @@ def get_trend_15m(df_1m):
 # ========================
 def check_entry_5m(df_1m, trend):
 
-    df_5m = df_1m.groupby(df_1m.index // 5).last()
+    df_5m = df_1m.groupby(df_1m.index // 5).agg({
+        "close": "last"
+    })
 
     if len(df_5m) < 30:
         return
@@ -99,11 +101,15 @@ def check_entry_5m(df_1m, trend):
 
     entry = round(last["close"], 2)
 
-    # BUY CONDITION
+    # =========================
+    # BUY SIDE
+    # =========================
     if trend == "BUY":
+
+        # 🔹 PULLBACK SETUP
         if (
             last["ema9"] > last["ema21"] and
-            45 < last["rsi"] < 60 and
+            40 < last["rsi"] < 65 and
             last["close"] > prev["close"]
         ):
             sl = round(entry - 4, 2)
@@ -111,17 +117,33 @@ def check_entry_5m(df_1m, trend):
 
             send_telegram(
                 f"🔥 XAUUSD BUY (5M Pullback)\n"
-                f"Entry: {entry}\n"
-                f"SL: {sl}\n"
-                f"TP: {tp}\n"
-                f"RR 1:2"
+                f"Entry: {entry}\nSL: {sl}\nTP: {tp}\nRR 1:2"
             )
+            return
 
-    # SELL CONDITION
+        # 🔹 BREAKOUT SETUP
+        if (
+            last["close"] > prev["close"] and
+            last["rsi"] > 55
+        ):
+            sl = round(entry - 5, 2)
+            tp = round(entry + 10, 2)
+
+            send_telegram(
+                f"🚀 XAUUSD BUY (5M Breakout)\n"
+                f"Entry: {entry}\nSL: {sl}\nTP: {tp}\nRR 1:2"
+            )
+            return
+
+    # =========================
+    # SELL SIDE
+    # =========================
     if trend == "SELL":
+
+        # 🔹 PULLBACK
         if (
             last["ema9"] < last["ema21"] and
-            40 < last["rsi"] < 55 and
+            35 < last["rsi"] < 60 and
             last["close"] < prev["close"]
         ):
             sl = round(entry + 4, 2)
@@ -129,11 +151,23 @@ def check_entry_5m(df_1m, trend):
 
             send_telegram(
                 f"🔥 XAUUSD SELL (5M Pullback)\n"
-                f"Entry: {entry}\n"
-                f"SL: {sl}\n"
-                f"TP: {tp}\n"
-                f"RR 1:2"
+                f"Entry: {entry}\nSL: {sl}\nTP: {tp}\nRR 1:2"
             )
+            return
+
+        # 🔹 BREAKOUT
+        if (
+            last["close"] < prev["close"] and
+            last["rsi"] < 45
+        ):
+            sl = round(entry + 5, 2)
+            tp = round(entry - 10, 2)
+
+            send_telegram(
+                f"🚀 XAUUSD SELL (5M Breakout)\n"
+                f"Entry: {entry}\nSL: {sl}\nTP: {tp}\nRR 1:2"
+            )
+            return
 
 # ========================
 # MAIN LOOP
