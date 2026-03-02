@@ -3,62 +3,109 @@ import pandas as pd
 import ta
 import time
 import os
+from datetime import datetime
 
-TOKEN = os.getenv("BOT_TOKEN")
+# ========================
+# ENV VARIABLES
+# ========================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+API_KEY = os.getenv("TWELVE_API_KEY")
 
+# ========================
+# TELEGRAM FUNCTION
+# ========================
 def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
-    requests.post(url, data=data)
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {"chat_id": CHAT_ID, "text": message}
+        requests.post(url, data=data)
+    except Exception as e:
+        print("TELEGRAM ERROR:", e)
 
-def get_price():
-    url = "https://api.gold-api.com/price/XAUUSD"
-    r = requests.get(url)
-    return r.json()["price"]
+# ========================
+# GET 1 MINUTE CANDLES
+# ========================
+def get_1m_candles():
+    try:
+        url = "https://api.twelvedata.com/time_series"
+        params = {
+            "symbol": "XAU/USD",
+            "interval": "1min",
+            "outputsize": 200,
+            "apikey": API_KEY
+        }
 
-prices_1m = []
+        r = requests.get(url, params=params, timeout=10)
 
-def get_trend_15m():
-    if len(prices_1m) < 200:
+        if r.status_code != 200:
+            print("HTTP ERROR:", r.status_code)
+            return None
+
+        data = r.json()
+
+        if "values" not in data:
+            print("Invalid response:", data)
+            return None
+
+        df = pd.DataFrame(data["values"])
+        df = df.iloc[::-1]  # reverse biar urut lama ke baru
+        df["close"] = df["close"].astype(float)
+
+        return df
+
+    except Exception as e:
+        print("CANDLE ERROR:", e)
         return None
 
-    df = pd.DataFrame(prices_1m[-150:], columns=["close"])
-    df_15m = df.groupby(df.index // 15).last()
+# ========================
+# TREND 15M FILTER
+# ========================
+def get_trend_15m(df_1m):
 
-    df_15m['ema50'] = ta.trend.ema_indicator(df_15m['close'], window=50)
-    df_15m['ema200'] = ta.trend.ema_indicator(df_15m['close'], window=200)
+    df_15m = df_1m.groupby(df_1m.index // 15).last()
+
+    if len(df_15m) < 200:
+        return None
+
+    df_15m["ema50"] = ta.trend.ema_indicator(df_15m["close"], window=50)
+    df_15m["ema200"] = ta.trend.ema_indicator(df_15m["close"], window=200)
 
     last = df_15m.iloc[-1]
 
-    if last['ema50'] > last['ema200']:
+    if last["ema50"] > last["ema200"]:
         return "BUY"
-    elif last['ema50'] < last['ema200']:
+    elif last["ema50"] < last["ema200"]:
         return "SELL"
     else:
         return None
 
-def check_entry_5m(trend):
-    if len(prices_1m) < 100:
+# ========================
+# ENTRY 5M SETUP
+# ========================
+def check_entry_5m(df_1m, trend):
+
+    df_5m = df_1m.groupby(df_1m.index // 5).last()
+
+    if len(df_5m) < 30:
         return
 
-    df = pd.DataFrame(prices_1m[-75:], columns=["close"])
-    df_5m = df.groupby(df.index // 5).last()
-
-    df_5m['ema9'] = ta.trend.ema_indicator(df_5m['close'], window=9)
-    df_5m['ema21'] = ta.trend.ema_indicator(df_5m['close'], window=21)
-    df_5m['rsi'] = ta.momentum.rsi(df_5m['close'], window=14)
+    df_5m["ema9"] = ta.trend.ema_indicator(df_5m["close"], window=9)
+    df_5m["ema21"] = ta.trend.ema_indicator(df_5m["close"], window=21)
+    df_5m["rsi"] = ta.momentum.rsi(df_5m["close"], window=14)
 
     last = df_5m.iloc[-1]
     prev = df_5m.iloc[-2]
 
-    entry = round(last['close'], 2)
+    entry = round(last["close"], 2)
 
+    # BUY CONDITION
     if trend == "BUY":
-        if (last['ema9'] > last['ema21'] and
-            45 < last['rsi'] < 60 and
-            last['close'] > prev['close']):
-            
+        if (
+            last["ema9"] > last["ema21"] and
+            45 < last["rsi"] < 60 and
+            last["close"] > prev["close"]
+        ):
             sl = round(entry - 4, 2)
             tp = round(entry + 8, 2)
 
@@ -70,11 +117,13 @@ def check_entry_5m(trend):
                 f"RR 1:2"
             )
 
+    # SELL CONDITION
     if trend == "SELL":
-        if (last['ema9'] < last['ema21'] and
-            40 < last['rsi'] < 55 and
-            last['close'] < prev['close']):
-            
+        if (
+            last["ema9"] < last["ema21"] and
+            40 < last["rsi"] < 55 and
+            last["close"] < prev["close"]
+        ):
             sl = round(entry + 4, 2)
             tp = round(entry - 8, 2)
 
@@ -86,26 +135,27 @@ def check_entry_5m(trend):
                 f"RR 1:2"
             )
 
-send_telegram("🚀 XAUUSD PRO 5M Bot Aktif")
+# ========================
+# MAIN LOOP
+# ========================
+send_telegram("🚀 XAUUSD PRO 5M Bot Aktif (TwelveData)")
 
 while True:
     try:
-        price = get_price()
-        prices_1m.append(price)
+        df = get_1m_candles()
 
-        print("Price:", price)
+        if df is None:
+            time.sleep(60)
+            continue
 
-        if len(prices_1m) > 500:
-            prices_1m.pop(0)
-
-        trend = get_trend_15m()
+        trend = get_trend_15m(df)
         print("Trend:", trend)
 
         if trend:
-            check_entry_5m(trend)
+            check_entry_5m(df, trend)
 
         time.sleep(60)
 
     except Exception as e:
-        print("ERROR:", e)
+        print("MAIN ERROR:", e)
         time.sleep(60)
