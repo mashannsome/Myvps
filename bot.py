@@ -93,15 +93,19 @@ while True:
         price = get_price()
         prices_1m.append(price)
 
+        print("Price:", price)
+
         if len(prices_1m) > 500:
             prices_1m.pop(0)
 
         trend = get_trend_15m()
+        print("Trend:", trend)
 
         if trend:
             check_entry_5m(trend)
 
         time.sleep(60)
 
-    except:
+    except Exception as e:
+        print("ERROR:", e)
         time.sleep(60)
