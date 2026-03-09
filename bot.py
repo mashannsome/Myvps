@@ -11,7 +11,7 @@ POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-symbol = "C:XAUUSD"
+symbol = "C.C:XAUUSD"
 
 price_data = []
 max_data = 500
@@ -31,7 +31,10 @@ def send_telegram(msg):
 
         requests.post(
             url,
-            data={"chat_id": CHAT_ID, "text": msg},
+            data={
+                "chat_id": CHAT_ID,
+                "text": msg
+            },
             timeout=10
         )
 
@@ -39,7 +42,8 @@ def send_telegram(msg):
 
     except Exception as e:
 
-        print(e)
+        print("TELEGRAM ERROR:", e)
+
 
 # =====================
 # SESSION FILTER
@@ -54,8 +58,9 @@ def session_active():
 
     return True
 
+
 # =====================
-# BUILD DF
+# BUILD DATAFRAME
 # =====================
 
 def get_df():
@@ -68,19 +73,20 @@ def get_df():
 
     return df
 
+
 # =====================
-# TREND
+# TREND DETECTION
 # =====================
 
 def get_trend(df):
 
-    df15 = df.resample("15T").agg({"price":"last"}).dropna()
+    df15 = df.resample("15T").agg({"price": "last"}).dropna()
 
     if len(df15) < 50:
         return None
 
-    df15["ema20"] = ta.trend.ema_indicator(df15["price"],20)
-    df15["ema50"] = ta.trend.ema_indicator(df15["price"],50)
+    df15["ema20"] = ta.trend.ema_indicator(df15["price"], 20)
+    df15["ema50"] = ta.trend.ema_indicator(df15["price"], 50)
 
     last = df15.iloc[-1]
 
@@ -92,25 +98,30 @@ def get_trend(df):
 
     return None
 
+
 # =====================
 # LIQUIDITY SWEEP
 # =====================
 
 def liquidity_sweep(df):
 
+    if len(df) < 2:
+        return None
+
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    if last["price"] > prev["price"] * 1.0005 and last["price"] < prev["price"]:
+    if last["price"] > prev["price"] * 1.0005:
         return "SELL"
 
-    if last["price"] < prev["price"] * 0.9995 and last["price"] > prev["price"]:
+    if last["price"] < prev["price"] * 0.9995:
         return "BUY"
 
     return None
 
+
 # =====================
-# ENTRY
+# ENTRY CHECK
 # =====================
 
 def check_entry():
@@ -128,30 +139,28 @@ def check_entry():
 
     df = get_df()
 
-    df["ema3"] = ta.trend.ema_indicator(df["price"],3)
-    df["ema8"] = ta.trend.ema_indicator(df["price"],8)
-
-    df["rsi"] = ta.momentum.rsi(df["price"],7)
+    df["ema3"] = ta.trend.ema_indicator(df["price"], 3)
+    df["ema8"] = ta.trend.ema_indicator(df["price"], 8)
+    df["rsi"] = ta.momentum.rsi(df["price"], 7)
 
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
     trend = get_trend(df)
-
     sweep = liquidity_sweep(df)
 
     entry = last["price"]
 
+    # BUY
     if trend == "BUY" and sweep == "BUY":
 
         if last["ema3"] > last["ema8"] and last["price"] > prev["price"]:
 
-            sl = round(entry - 3,2)
-            tp = round(entry + 6,2)
+            sl = round(entry - 3, 2)
+            tp = round(entry + 6, 2)
 
             send_telegram(
-f"""
-🚀 XAUUSD BUY
+f"""🚀 XAUUSD BUY
 
 Entry : {entry}
 SL : {sl}
@@ -160,20 +169,20 @@ TP : {tp}
 RR 1:2
 AI Liquidity Strategy
 """
-)
+            )
 
             last_signal_time = time.time()
 
+    # SELL
     if trend == "SELL" and sweep == "SELL":
 
         if last["ema3"] < last["ema8"] and last["price"] < prev["price"]:
 
-            sl = round(entry + 3,2)
-            tp = round(entry - 6,2)
+            sl = round(entry + 3, 2)
+            tp = round(entry - 6, 2)
 
             send_telegram(
-f"""
-🚀 XAUUSD SELL
+f"""🚀 XAUUSD SELL
 
 Entry : {entry}
 SL : {sl}
@@ -182,12 +191,13 @@ TP : {tp}
 RR 1:2
 AI Liquidity Strategy
 """
-)
+            )
 
             last_signal_time = time.time()
 
+
 # =====================
-# WEBSOCKET
+# WEBSOCKET MESSAGE
 # =====================
 
 def on_message(ws, message):
@@ -198,19 +208,31 @@ def on_message(ws, message):
 
     for item in data:
 
-        if item["ev"] == "C":
+        if item.get("ev") == "C":
 
-            price = item["p"]
+            bid = item.get("bp")
+            ask = item.get("ap")
 
-            price_data.append({
-                "datetime": datetime.now(UTC),
-                "price": price
-            })
+            if bid and ask:
 
-            if len(price_data) > max_data:
-                price_data.pop(0)
+                price = (bid + ask) / 2
 
-            check_entry()
+                print("PRICE:", price)
+
+                price_data.append({
+                    "datetime": datetime.now(UTC),
+                    "price": price
+                })
+
+                if len(price_data) > max_data:
+                    price_data.pop(0)
+
+                check_entry()
+
+
+# =====================
+# OPEN CONNECTION
+# =====================
 
 def on_open(ws):
 
@@ -226,15 +248,40 @@ def on_open(ws):
         "params": symbol
     }))
 
+
+# =====================
+# ERROR HANDLER
+# =====================
+
+def on_error(ws, error):
+
+    print("WS ERROR:", error)
+
+
+def on_close(ws, close_status_code, close_msg):
+
+    print("WS CLOSED")
+
+
+# =====================
+# START WS
+# =====================
+
 def start_ws():
 
     ws = websocket.WebSocketApp(
         "wss://socket.polygon.io/forex",
         on_open=on_open,
-        on_message=on_message
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
     )
 
-    ws.run_forever()
+    ws.run_forever(
+        ping_interval=30,
+        ping_timeout=10
+    )
+
 
 # =====================
 # MAIN
