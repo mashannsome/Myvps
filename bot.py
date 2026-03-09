@@ -7,17 +7,22 @@ import os
 import time
 from datetime import datetime, UTC
 
+# =====================
+# ENV
+# =====================
+
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-symbol = "C.C:XAUUSD"
+SYMBOL = "C.XAUUSD"
 
 price_data = []
-max_data = 500
+MAX_DATA = 500
 
 last_signal_time = 0
-cooldown = 300
+COOLDOWN = 300
+
 
 # =====================
 # TELEGRAM
@@ -75,7 +80,7 @@ def get_df():
 
 
 # =====================
-# TREND DETECTION
+# TREND
 # =====================
 
 def get_trend(df):
@@ -134,7 +139,7 @@ def check_entry():
     if len(price_data) < 100:
         return
 
-    if time.time() - last_signal_time < cooldown:
+    if time.time() - last_signal_time < COOLDOWN:
         return
 
     df = get_df()
@@ -197,14 +202,19 @@ AI Liquidity Strategy
 
 
 # =====================
-# WEBSOCKET MESSAGE
+# MESSAGE HANDLER
 # =====================
 
 def on_message(ws, message):
 
     global price_data
 
+    print("RAW:", message)
+
     data = json.loads(message)
+
+    if not isinstance(data, list):
+        return
 
     for item in data:
 
@@ -224,33 +234,39 @@ def on_message(ws, message):
                     "price": price
                 })
 
-                if len(price_data) > max_data:
+                if len(price_data) > MAX_DATA:
                     price_data.pop(0)
 
                 check_entry()
 
 
 # =====================
-# OPEN CONNECTION
+# OPEN
 # =====================
 
 def on_open(ws):
 
     print("CONNECTED")
 
-    ws.send(json.dumps({
+    auth = {
         "action": "auth",
         "params": POLYGON_API_KEY
-    }))
+    }
 
-    ws.send(json.dumps({
+    ws.send(json.dumps(auth))
+
+    sub = {
         "action": "subscribe",
-        "params": symbol
-    }))
+        "params": SYMBOL
+    }
+
+    ws.send(json.dumps(sub))
+
+    print("SUBSCRIBED:", SYMBOL)
 
 
 # =====================
-# ERROR HANDLER
+# ERROR
 # =====================
 
 def on_error(ws, error):
@@ -258,13 +274,17 @@ def on_error(ws, error):
     print("WS ERROR:", error)
 
 
+# =====================
+# CLOSE
+# =====================
+
 def on_close(ws, close_status_code, close_msg):
 
     print("WS CLOSED")
 
 
 # =====================
-# START WS
+# START WEBSOCKET
 # =====================
 
 def start_ws():
