@@ -141,10 +141,10 @@ def get_trend(df):
 
         last = df15.iloc[-1]
 
-        if last["ema20"] > last["ema50"] and last["adx"] > 20:
+        if last["ema20"] > last["ema50"] and last["adx"] > 15:
             return "BUY"
 
-        if last["ema20"] < last["ema50"] and last["adx"] > 20:
+        if last["ema20"] < last["ema50"] and last["adx"] > 15:
             return "SELL"
 
         return None
