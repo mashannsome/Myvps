@@ -3,34 +3,57 @@ import pandas as pd
 import ta
 import time
 import os
-from datetime import datetime, UTC
 import warnings
+from datetime import datetime, UTC
+
 warnings.filterwarnings("ignore")
 
+# =========================
+# ENV
+# =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 API_KEY = os.getenv("TWELVE_API_KEY")
 
+# =========================
+# GLOBAL CONFIG
+# =========================
 last_signal_time = 0
 cooldown = 300
 
+# =========================
+# LOG FUNCTION
+# =========================
+def log(msg):
 
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+    print(f"[{now}] {msg}")
+
+# =========================
+# TELEGRAM
+# =========================
 def send_telegram(msg):
 
     try:
+
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-        requests.post(url, data={
-            "chat_id": CHAT_ID,
-            "text": msg
-        })
+        requests.post(
+            url,
+            data={"chat_id": CHAT_ID, "text": msg},
+            timeout=10
+        )
 
-        print("SIGNAL SENT")
+        log("SIGNAL SENT")
 
     except Exception as e:
-        print(e)
 
+        log(f"TELEGRAM ERROR: {e}")
 
+# =========================
+# SESSION FILTER
+# =========================
 def session_filter():
 
     hour = datetime.now(UTC).hour
@@ -40,114 +63,158 @@ def session_filter():
 
     return True
 
-
+# =========================
+# GET MARKET DATA
+# =========================
 def get_data():
 
-    url = "https://api.twelvedata.com/time_series"
+    try:
 
-    params = {
-        "symbol": "XAU/USD",
-        "interval": "1min",
-        "outputsize": 1000,
-        "apikey": API_KEY
-    }
+        url = "https://api.twelvedata.com/time_series"
 
-    r = requests.get(url, params=params)
+        params = {
+            "symbol": "XAU/USD",
+            "interval": "1min",
+            "outputsize": 500,
+            "apikey": API_KEY
+        }
 
-    data = r.json()
+        r = requests.get(url, params=params, timeout=15)
 
-    if "values" not in data:
+        if r.status_code != 200:
+            log("HTTP ERROR")
+            return None
+
+        data = r.json()
+
+        if "values" not in data:
+            log("INVALID DATA")
+            return None
+
+        df = pd.DataFrame(data["values"])
+
+        df = df.iloc[::-1]
+
+        df["datetime"] = pd.to_datetime(df["datetime"])
+
+        df["open"] = df["open"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["close"] = df["close"].astype(float)
+
+        df.set_index("datetime", inplace=True)
+
+        return df
+
+    except Exception as e:
+
+        log(f"DATA ERROR: {e}")
+
         return None
 
-    df = pd.DataFrame(data["values"])
-
-    df = df.iloc[::-1]
-
-    df["datetime"] = pd.to_datetime(df["datetime"])
-
-    df["open"] = df["open"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    df["close"] = df["close"].astype(float)
-
-    df.set_index("datetime", inplace=True)
-
-    return df
-
-
+# =========================
+# TREND DETECTION
+# =========================
 def get_trend(df):
 
-    df15 = df.resample("15T").agg({
-        "open":"first",
-        "high":"max",
-        "low":"min",
-        "close":"last"
-    }).dropna()
+    try:
 
-    df15["ema20"] = ta.trend.ema_indicator(df15["close"],20)
-    df15["ema50"] = ta.trend.ema_indicator(df15["close"],50)
-    df15["adx"] = ta.trend.adx(df15["high"],df15["low"],df15["close"],14)
+        df15 = df.resample("15T").agg({
+            "open":"first",
+            "high":"max",
+            "low":"min",
+            "close":"last"
+        }).dropna()
 
-    last = df15.iloc[-1]
+        df15["ema20"] = ta.trend.ema_indicator(df15["close"],20)
+        df15["ema50"] = ta.trend.ema_indicator(df15["close"],50)
 
-    if last["ema20"] > last["ema50"] and last["adx"] > 20:
-        return "BUY"
+        df15["adx"] = ta.trend.adx(
+            df15["high"],
+            df15["low"],
+            df15["close"],
+            14
+        )
 
-    if last["ema20"] < last["ema50"] and last["adx"] > 20:
-        return "SELL"
+        last = df15.iloc[-1]
 
-    return None
+        if last["ema20"] > last["ema50"] and last["adx"] > 20:
+            return "BUY"
 
+        if last["ema20"] < last["ema50"] and last["adx"] > 20:
+            return "SELL"
 
+        return None
+
+    except Exception as e:
+
+        log(f"TREND ERROR: {e}")
+
+        return None
+
+# =========================
+# LIQUIDITY SWEEP
+# =========================
 def liquidity_sweep(df):
 
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+    try:
 
-    if last["high"] > prev["high"] and last["close"] < prev["high"]:
-        return "SELL"
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
 
-    if last["low"] < prev["low"] and last["close"] > prev["low"]:
-        return "BUY"
+        if last["high"] > prev["high"] and last["close"] < prev["high"]:
+            return "SELL"
 
-    return None
+        if last["low"] < prev["low"] and last["close"] > prev["low"]:
+            return "BUY"
 
+        return None
 
+    except:
+
+        return None
+
+# =========================
+# ENTRY SIGNAL
+# =========================
 def check_entry(df, trend):
 
     global last_signal_time
 
-    if time.time() - last_signal_time < cooldown:
-        return
+    try:
 
-    df["ema3"] = ta.trend.ema_indicator(df["close"],3)
-    df["ema8"] = ta.trend.ema_indicator(df["close"],8)
+        if time.time() - last_signal_time < cooldown:
+            return
 
-    df["rsi"] = ta.momentum.rsi(df["close"],7)
+        df["ema3"] = ta.trend.ema_indicator(df["close"],3)
+        df["ema8"] = ta.trend.ema_indicator(df["close"],8)
 
-    df["atr"] = ta.volatility.average_true_range(
-        df["high"],
-        df["low"],
-        df["close"],
-        14
-    )
+        df["rsi"] = ta.momentum.rsi(df["close"],7)
 
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+        df["atr"] = ta.volatility.average_true_range(
+            df["high"],
+            df["low"],
+            df["close"],
+            14
+        )
 
-    entry = last["close"]
-    atr = last["atr"]
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
 
-    sweep = liquidity_sweep(df)
+        entry = last["close"]
+        atr = last["atr"]
 
-    if trend == "BUY" and sweep == "BUY":
+        sweep = liquidity_sweep(df)
 
-        if last["ema3"] > last["ema8"] and last["close"] > prev["high"]:
+        # BUY
+        if trend == "BUY" and sweep == "BUY":
 
-            sl = round(entry - atr*1.5,2)
-            tp = round(entry + atr*3,2)
+            if last["ema3"] > last["ema8"] and last["close"] > prev["high"]:
 
-            send_telegram(
+                sl = round(entry - atr*1.5,2)
+                tp = round(entry + atr*3,2)
+
+                send_telegram(
 f"""
 🚀 XAUUSD BUY
 
@@ -160,17 +227,17 @@ Strategy : Liquidity Sweep
 """
 )
 
-            last_signal_time = time.time()
+                last_signal_time = time.time()
 
+        # SELL
+        if trend == "SELL" and sweep == "SELL":
 
-    if trend == "SELL" and sweep == "SELL":
+            if last["ema3"] < last["ema8"] and last["close"] < prev["low"]:
 
-        if last["ema3"] < last["ema8"] and last["close"] < prev["low"]:
+                sl = round(entry + atr*1.5,2)
+                tp = round(entry - atr*3,2)
 
-            sl = round(entry + atr*1.5,2)
-            tp = round(entry - atr*3,2)
-
-            send_telegram(
+                send_telegram(
 f"""
 🚀 XAUUSD SELL
 
@@ -183,39 +250,56 @@ Strategy : Liquidity Sweep
 """
 )
 
-            last_signal_time = time.time()
+                last_signal_time = time.time()
 
+    except Exception as e:
 
-send_telegram("🚀 XAUUSD SCALPING BOT V3 AKTIF")
+        log(f"ENTRY ERROR: {e}")
 
+# =========================
+# BOT START
+# =========================
+send_telegram("🚀 XAUUSD SCALPING BOT STABLE VPS STARTED")
 
+# =========================
+# MAIN LOOP
+# =========================
 while True:
 
     try:
 
+        log("BOT RUNNING")
+
         if not session_filter():
-            print("SESSION OFF")
+
+            log("SESSION CLOSED")
+
             time.sleep(60)
+
             continue
 
         df = get_data()
 
         if df is None:
+
+            log("DATA EMPTY")
+
             time.sleep(60)
+
             continue
 
         trend = get_trend(df)
 
-        print("TREND:",trend)
+        log(f"TREND: {trend}")
 
         if trend:
 
-            check_entry(df,trend)
+            check_entry(df, trend)
 
         time.sleep(60)
 
     except Exception as e:
 
-        print("ERROR:",e)
+        log(f"MAIN LOOP ERROR: {e}")
 
         time.sleep(60)
