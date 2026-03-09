@@ -4,6 +4,8 @@ import ta
 import time
 import os
 from datetime import datetime, UTC
+import warnings
+warnings.filterwarnings("ignore")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
