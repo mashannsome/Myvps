@@ -31,7 +31,7 @@ def send_telegram(msg):
 
 def session_filter():
 
-    hour = datetime.utcnow().hour
+    hour = datetime.now(UTC).hour
 
     if hour < 6 or hour > 16:
         return False
