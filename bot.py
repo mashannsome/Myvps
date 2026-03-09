@@ -1,28 +1,22 @@
-import websocket
-import json
+import requests
 import pandas as pd
 import ta
-import requests
-import os
 import time
-from datetime import datetime, UTC
+import os
 
 # =====================
 # ENV
 # =====================
 
-POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
+TWELVE_API = os.getenv("TWELVE_API_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-SYMBOL = "C.XAUUSD"
+symbol = "XAU/USD"
 
-price_data = []
-MAX_DATA = 500
-
+last_signal = None
 last_signal_time = 0
-COOLDOWN = 300
-
+cooldown = 600
 
 # =====================
 # TELEGRAM
@@ -30,79 +24,55 @@ COOLDOWN = 300
 
 def send_telegram(msg):
 
-    try:
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-        requests.post(
-            url,
-            data={
-                "chat_id": CHAT_ID,
-                "text": msg
-            },
-            timeout=10
-        )
-
-        print("SIGNAL SENT")
-
-    except Exception as e:
-
-        print("TELEGRAM ERROR:", e)
-
+    requests.post(
+        url,
+        data={
+            "chat_id": CHAT_ID,
+            "text": msg
+        }
+    )
 
 # =====================
-# SESSION FILTER
+# GET DATA
 # =====================
 
-def session_active():
+def get_data():
 
-    hour = datetime.now(UTC).hour
+    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=1min&outputsize=200&apikey={TWELVE_API}"
 
-    if hour < 6 or hour > 16:
-        return False
+    r = requests.get(url)
 
-    return True
+    data = r.json()
 
+    df = pd.DataFrame(data["values"])
 
-# =====================
-# BUILD DATAFRAME
-# =====================
+    df = df.iloc[::-1]
 
-def get_df():
-
-    df = pd.DataFrame(price_data)
-
-    df["datetime"] = pd.to_datetime(df["datetime"])
-
-    df.set_index("datetime", inplace=True)
+    df["open"] = df["open"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["close"] = df["close"].astype(float)
 
     return df
 
-
 # =====================
-# TREND
+# BOS DETECTION
 # =====================
 
-def get_trend(df):
+def break_of_structure(df):
 
-    df15 = df.resample("15T").agg({"price": "last"}).dropna()
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
 
-    if len(df15) < 50:
-        return None
-
-    df15["ema20"] = ta.trend.ema_indicator(df15["price"], 20)
-    df15["ema50"] = ta.trend.ema_indicator(df15["price"], 50)
-
-    last = df15.iloc[-1]
-
-    if last["ema20"] > last["ema50"]:
+    if last["high"] > prev["high"]:
         return "BUY"
 
-    if last["ema20"] < last["ema50"]:
+    if last["low"] < prev["low"]:
         return "SELL"
 
     return None
-
 
 # =====================
 # LIQUIDITY SWEEP
@@ -110,213 +80,114 @@ def get_trend(df):
 
 def liquidity_sweep(df):
 
-    if len(df) < 2:
-        return None
-
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    if last["price"] > prev["price"] * 1.0005:
+    if last["high"] > prev["high"] and last["close"] < prev["high"]:
         return "SELL"
 
-    if last["price"] < prev["price"] * 0.9995:
+    if last["low"] < prev["low"] and last["close"] > prev["low"]:
         return "BUY"
 
     return None
 
-
 # =====================
-# ENTRY CHECK
+# SIGNAL LOGIC
 # =====================
 
-def check_entry():
+def check_signal():
 
+    global last_signal
     global last_signal_time
 
-    if not session_active():
+    if time.time() - last_signal_time < cooldown:
         return
 
-    if len(price_data) < 100:
-        return
+    df = get_data()
 
-    if time.time() - last_signal_time < COOLDOWN:
-        return
+    df["ema20"] = ta.trend.ema_indicator(df["close"],20)
+    df["ema50"] = ta.trend.ema_indicator(df["close"],50)
 
-    df = get_df()
-
-    df["ema3"] = ta.trend.ema_indicator(df["price"], 3)
-    df["ema8"] = ta.trend.ema_indicator(df["price"], 8)
-    df["rsi"] = ta.momentum.rsi(df["price"], 7)
+    df["rsi"] = ta.momentum.rsi(df["close"],14)
 
     last = df.iloc[-1]
-    prev = df.iloc[-2]
 
-    trend = get_trend(df)
+    price = last["close"]
+
+    trend = None
+
+    if last["ema20"] > last["ema50"]:
+        trend = "BUY"
+
+    if last["ema20"] < last["ema50"]:
+        trend = "SELL"
+
+    bos = break_of_structure(df)
+
     sweep = liquidity_sweep(df)
 
-    entry = last["price"]
-
     # BUY
-    if trend == "BUY" and sweep == "BUY":
+    if trend == "BUY" and bos == "BUY" and sweep != "SELL" and last["rsi"] > 55:
 
-        if last["ema3"] > last["ema8"] and last["price"] > prev["price"]:
+        if last_signal != "BUY":
 
-            sl = round(entry - 3, 2)
-            tp = round(entry + 6, 2)
+            msg=f"""
+🚀 XAUUSD BUY
 
-            send_telegram(
-f"""🚀 XAUUSD BUY
+Entry : {price}
+SL : {round(price-3,2)}
+TP : {round(price+6,2)}
 
-Entry : {entry}
-SL : {sl}
-TP : {tp}
-
-RR 1:2
-AI Liquidity Strategy
+Strategy:
+Trend EMA
+Break Of Structure
+RSI Momentum
 """
-            )
 
-            last_signal_time = time.time()
+            send_telegram(msg)
+
+            last_signal="BUY"
+            last_signal_time=time.time()
 
     # SELL
-    if trend == "SELL" and sweep == "SELL":
+    if trend == "SELL" and bos == "SELL" and sweep != "BUY" and last["rsi"] < 45:
 
-        if last["ema3"] < last["ema8"] and last["price"] < prev["price"]:
+        if last_signal != "SELL":
 
-            sl = round(entry + 3, 2)
-            tp = round(entry - 6, 2)
+            msg=f"""
+🚀 XAUUSD SELL
 
-            send_telegram(
-f"""🚀 XAUUSD SELL
+Entry : {price}
+SL : {round(price+3,2)}
+TP : {round(price-6,2)}
 
-Entry : {entry}
-SL : {sl}
-TP : {tp}
-
-RR 1:2
-AI Liquidity Strategy
+Strategy:
+Trend EMA
+Break Of Structure
+RSI Momentum
 """
-            )
 
-            last_signal_time = time.time()
+            send_telegram(msg)
 
-
-# =====================
-# MESSAGE HANDLER
-# =====================
-
-def on_message(ws, message):
-
-    global price_data
-
-    print("RAW:", message)
-
-    data = json.loads(message)
-
-    if not isinstance(data, list):
-        return
-
-    for item in data:
-
-        if item.get("ev") == "C":
-
-            bid = item.get("bp")
-            ask = item.get("ap")
-
-            if bid and ask:
-
-                price = (bid + ask) / 2
-
-                print("PRICE:", price)
-
-                price_data.append({
-                    "datetime": datetime.now(UTC),
-                    "price": price
-                })
-
-                if len(price_data) > MAX_DATA:
-                    price_data.pop(0)
-
-                check_entry()
-
+            last_signal="SELL"
+            last_signal_time=time.time()
 
 # =====================
-# OPEN
+# MAIN LOOP
 # =====================
 
-def on_open(ws):
+print("XAUUSD BOT STARTED")
 
-    print("CONNECTED")
-
-    auth = {
-        "action": "auth",
-        "params": POLYGON_API_KEY
-    }
-
-    ws.send(json.dumps(auth))
-
-    sub = {
-        "action": "subscribe",
-        "params": SYMBOL
-    }
-
-    ws.send(json.dumps(sub))
-
-    print("SUBSCRIBED:", SYMBOL)
-
-
-# =====================
-# ERROR
-# =====================
-
-def on_error(ws, error):
-
-    print("WS ERROR:", error)
-
-
-# =====================
-# CLOSE
-# =====================
-
-def on_close(ws, close_status_code, close_msg):
-
-    print("WS CLOSED")
-
-
-# =====================
-# START WEBSOCKET
-# =====================
-
-def start_ws():
-
-    ws = websocket.WebSocketApp(
-        "wss://socket.polygon.io/forex",
-        on_open=on_open,
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close
-    )
-
-    ws.run_forever(
-        ping_interval=30,
-        ping_timeout=10
-    )
-
-
-# =====================
-# MAIN
-# =====================
-
-send_telegram("🚀 XAUUSD AI SCALPING BOT STARTED")
+send_telegram("🚀 XAUUSD BOT RUNNING (RAILWAY)")
 
 while True:
 
     try:
 
-        start_ws()
+        check_signal()
 
     except Exception as e:
 
-        print("RECONNECTING...", e)
+        print("ERROR:", e)
 
-        time.sleep(5)
+    time.sleep(60)
