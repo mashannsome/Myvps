@@ -82,7 +82,7 @@ def get_data():
         r = requests.get(url, params=params, timeout=15)
 
         if r.status_code != 200:
-            log("HTTP ERROR")
+            log(f"HTTP ERROR {r.status_code}")
             return None
 
         data = r.json()
@@ -119,15 +119,18 @@ def get_trend(df):
 
     try:
 
-        df15 = df.resample("15T").agg({
-            "open":"first",
-            "high":"max",
-            "low":"min",
-            "close":"last"
+        df15 = df.resample("15min").agg({
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last"
         }).dropna()
 
-        df15["ema20"] = ta.trend.ema_indicator(df15["close"],20)
-        df15["ema50"] = ta.trend.ema_indicator(df15["close"],50)
+        if len(df15) < 60:
+            return None
+
+        df15["ema20"] = ta.trend.ema_indicator(df15["close"], 20)
+        df15["ema50"] = ta.trend.ema_indicator(df15["close"], 50)
 
         df15["adx"] = ta.trend.adx(
             df15["high"],
@@ -149,7 +152,6 @@ def get_trend(df):
     except Exception as e:
 
         log(f"TREND ERROR: {e}")
-
         return None
 
 # =========================
